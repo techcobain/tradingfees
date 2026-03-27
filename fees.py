@@ -1,6 +1,7 @@
 """Fee tier definitions and comparison engine."""
 
 from collections import defaultdict
+import re
 
 WINDOW_TO_PORTFOLIO_KEY = {
     "7d": "week",
@@ -44,6 +45,31 @@ HL_STAKING_TIERS = [
     {"name": "Diamond",  "min_hype": 500_000, "discount": 0.40},
 ]
 
+STANDARD_HIP3_TIERS = [
+    {"name": tier["name"], "min_volume": tier["min_volume"], "taker": tier["taker"] * 2, "maker": tier["maker"] * 2}
+    for tier in HL_PERP_TIERS
+]
+
+GROWTH_HIP3_TIERS = [
+    {"name": tier["name"], "min_volume": tier["min_volume"], "taker": tier["taker"] * 0.2, "maker": tier["maker"] * 0.2}
+    for tier in HL_PERP_TIERS
+]
+
+STANDARD_ALIGNED_HIP3_TIERS = [
+    {"name": tier["name"], "min_volume": tier["min_volume"], "taker": tier["taker"] * 1.8, "maker": tier["maker"] * 1.8}
+    for tier in HL_PERP_TIERS
+]
+
+GROWTH_ALIGNED_HIP3_TIERS = [
+    {"name": tier["name"], "min_volume": tier["min_volume"], "taker": tier["taker"] * 0.18, "maker": tier["maker"] * 0.18}
+    for tier in HL_PERP_TIERS
+]
+
+HYENA_TIERS = [
+    {"name": tier["name"], "min_volume": tier["min_volume"], "taker": tier["taker"] * 1.11, "maker": tier["maker"] * 1.11}
+    for tier in HL_PERP_TIERS
+]
+
 # ── Binance Futures USDT-M (30-day volume) ───────────────────────────────────
 BINANCE_TIERS = [
     {"name": "VIP 0",            "min_volume": 0,               "maker": 0.000200, "taker": 0.000500},
@@ -68,6 +94,15 @@ BYBIT_TIERS = [
     {"name": "VIP 5 (>$250M)",      "min_volume": 250_000_000,     "maker": 0.000100, "taker": 0.000320},
     {"name": "Supreme VIP (>$500M)", "min_volume": 500_000_000,    "maker": 0.000000, "taker": 0.000300},
 ]
+
+DEPLOYER_FEE_TIERS = {
+    "flx": STANDARD_HIP3_TIERS,
+    "xyz": STANDARD_HIP3_TIERS,
+    "km": GROWTH_ALIGNED_HIP3_TIERS,
+    "cash": GROWTH_HIP3_TIERS,
+    "vntl": STANDARD_ALIGNED_HIP3_TIERS,
+    "hyna": HYENA_TIERS,
+}
 
 
 def get_tier(tiers: list[dict], volume: float) -> dict:
@@ -135,6 +170,37 @@ def _build_spot_asset_labels(spot_meta: dict | None) -> dict[str, str]:
     return labels
 
 
+def _coin_prefix(raw_coin: str) -> str | None:
+    if not isinstance(raw_coin, str) or not raw_coin:
+        return None
+    if raw_coin.startswith("@"):
+        return None
+
+    match = re.match(r"^([a-z]+)", raw_coin.lower())
+    if not match:
+        return None
+
+    prefix = match.group(1)
+    return prefix if prefix in DEPLOYER_FEE_TIERS else None
+
+
+def _expected_hl_rates_for_coin(
+    raw_coin: str,
+    estimated_14d_vol: float,
+    staking_discount: float,
+    referral_discount: float,
+    default_taker_rate: float,
+    default_maker_rate: float,
+) -> tuple[float, float]:
+    prefix = _coin_prefix(raw_coin)
+    if not prefix:
+        return default_taker_rate, default_maker_rate
+
+    tier = get_tier(DEPLOYER_FEE_TIERS[prefix], estimated_14d_vol)
+    discount_multiplier = max(0.0, 1.0 - staking_discount - referral_discount)
+    return tier["taker"] * discount_multiplier, tier["maker"] * discount_multiplier
+
+
 def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, spot_meta: dict | None, address: str, window: str) -> dict:
     """Analyze fills and compute fee comparison across exchanges."""
     fills = fills_data["fills"]
@@ -155,6 +221,8 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
     total_volume = 0.0
     taker_volume = 0.0
     maker_volume = 0.0
+    taker_fees_paid = 0.0
+    maker_fees_paid = 0.0
     total_hl_fees = 0.0
     coin_stats = defaultdict(lambda: {"volume": 0.0, "fees": 0.0, "trades": 0})
 
@@ -184,8 +252,10 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
 
         if is_taker:
             taker_volume += notional
+            taker_fees_paid += fee_usd
         else:
             maker_volume += notional
+            maker_fees_paid += fee_usd
 
         coin_stats[coin]["volume"] += notional
         coin_stats[coin]["fees"] += fee_usd
@@ -223,6 +293,11 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
     estimated_missing_fees = 0.0
     history_estimated = False
 
+    # Derive realized side rates from the actual fills first. This captures
+    # HIP-3 deployer markets whose fees differ from the generic userFees API.
+    observed_taker_rate = (taker_fees_paid / taker_volume) if taker_volume > 0 else None
+    observed_maker_rate = (maker_fees_paid / maker_volume) if maker_volume > 0 else None
+
     if fills_data.get("truncated"):
         missing_requested_history = window == "all"
         requested_days = WINDOW_TO_DAYS.get(window)
@@ -245,9 +320,39 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
                 estimated_missing_volume = max(0.0, (total_volume / trading_days) * (requested_days - trading_days))
 
             if estimated_missing_volume > 0:
+                estimated_14d_vol = total_volume * (14 / trading_days) if trading_days > 14 else total_volume
+                expected_taker_sum = 0.0
+                expected_maker_sum = 0.0
+                for fill in fills:
+                    px = float(fill.get("px", 0))
+                    sz = float(fill.get("sz", 0))
+                    notional = px * sz
+                    exp_taker_rate, exp_maker_rate = _expected_hl_rates_for_coin(
+                        raw_coin=fill.get("coin", "UNKNOWN"),
+                        estimated_14d_vol=estimated_14d_vol,
+                        staking_discount=staking_discount,
+                        referral_discount=referral_discount,
+                        default_taker_rate=hl_taker_rate,
+                        default_maker_rate=hl_maker_rate,
+                    )
+                    if fill.get("crossed", True):
+                        expected_taker_sum += notional * exp_taker_rate
+                    else:
+                        expected_maker_sum += notional * exp_maker_rate
+
+                fallback_taker_rate = (
+                    observed_taker_rate
+                    if observed_taker_rate is not None
+                    else (expected_taker_sum / taker_volume if taker_volume > 0 else hl_taker_rate)
+                )
+                fallback_maker_rate = (
+                    observed_maker_rate
+                    if observed_maker_rate is not None
+                    else (expected_maker_sum / maker_volume if maker_volume > 0 else hl_maker_rate)
+                )
                 estimated_missing_fees = (
-                    (estimated_missing_volume * taker_weight * hl_taker_rate) +
-                    (estimated_missing_volume * maker_weight * hl_maker_rate)
+                    (estimated_missing_volume * taker_weight * fallback_taker_rate) +
+                    (estimated_missing_volume * maker_weight * fallback_maker_rate)
                 )
                 total_volume += estimated_missing_volume
                 taker_volume += estimated_missing_volume * taker_weight
@@ -261,6 +366,9 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
     # Determine HL volume tier from fee schedule
     estimated_14d_vol = total_volume * (14 / trading_days) if trading_days > 14 else total_volume
     hl_tier = get_tier(HL_PERP_TIERS, estimated_14d_vol)
+
+    effective_taker_rate = observed_taker_rate if observed_taker_rate is not None else hl_taker_rate
+    effective_maker_rate = observed_maker_rate if observed_maker_rate is not None else hl_maker_rate
 
     # ── Hypothetical fees on other exchanges ─────────────────────────────────
     # Estimate 30-day volume for Binance/Bybit tier matching
@@ -305,8 +413,8 @@ def analyze_fees(user_fees_data: dict, portfolio_data: list, fills_data: dict, s
         "hyperliquid": {
             "total_fees_paid": round(total_hl_fees, 2),
             "contains_estimated_history": history_estimated,
-            "effective_taker_rate": hl_taker_rate,
-            "effective_maker_rate": hl_maker_rate,
+            "effective_taker_rate": effective_taker_rate,
+            "effective_maker_rate": effective_maker_rate,
             "tier": hl_tier["name"],
             "staking_tier": staking_tier,
             "staking_discount": staking_discount,
