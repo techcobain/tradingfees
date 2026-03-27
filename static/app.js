@@ -16,15 +16,15 @@
     const resultsSection = $("results-section");
     const hlDetailsCard = $("hl-details");
     const coinsCard = $("coins-card");
-    const shareSection = $("share-section");
-    const shareToggleBtn = $("share-toggle-btn");
     const hint = $("hint");
     const themeSwitch = $("theme-switch");
     const themeSwitchLabel = $("theme-switch-label");
+    const shareToast = $("share-toast");
 
     let data = null;
-    let shareExpanded = false;
     let currentMode = "analyze";
+    let shareToastTimer = null;
+    let openShareMenu = null;
     const VALID_THEMES = ["light", "dark"];
     const VALID_WINDOWS = ["all", "7d", "30d", "90d", "1yr"];
     const saved = localStorage.getItem("tfw_theme");
@@ -60,7 +60,14 @@
     }
 
     function formatPct(val) { return (val * 100).toFixed(1) + "%"; }
-    function formatBps(val) { return (val * 10000).toFixed(2) + " bps"; }
+    function formatBps(val) {
+        const bps = (val || 0) * 10000;
+        const rounded = Math.round(bps * 100) / 100;
+        return rounded.toLocaleString("en-US", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+        }) + " bps";
+    }
     function formatNum(val) { return val.toLocaleString("en-US"); }
 
     function formatDate(ms) {
@@ -75,6 +82,16 @@
     function clearHint() {
         hint.textContent = "";
         hint.className = "hint";
+    }
+
+    function showShareToast(message) {
+        if (!shareToast) return;
+        shareToast.textContent = message;
+        shareToast.classList.add("is-visible");
+        clearTimeout(shareToastTimer);
+        shareToastTimer = setTimeout(() => {
+            shareToast.classList.remove("is-visible");
+        }, 2200);
     }
 
     function updateSimulateMixReadout() {
@@ -158,6 +175,18 @@
         return outer;
     }
 
+    function blobFromCanvas(canvas) {
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    resolve(blob);
+                    return;
+                }
+                reject(new Error("failed to generate image"));
+            }, "image/png");
+        });
+    }
+
     async function renderExportCanvas(el) {
         el.style.position = "fixed";
         el.style.left = "-9999px";
@@ -172,6 +201,53 @@
 
     function isValidAddress(addr) {
         return /^0x[a-fA-F0-9]{40}$/.test(addr);
+    }
+
+    function setShareMenuOpen(menuKey) {
+        const menus = [
+            { key: "overview", actionsEl: $("overview-share-actions"), controlsEl: $("overview-share-controls"), toggleEl: $("toggle-overview-share") },
+            { key: "bar-chart", actionsEl: $("bar-chart-share-actions"), controlsEl: $("bar-chart-share-controls"), toggleEl: $("toggle-bar-chart-share") },
+        ];
+        openShareMenu = menuKey;
+        for (const menu of menus) {
+            const isOpen = menu.key === menuKey;
+            menu.controlsEl.classList.toggle("is-open", isOpen);
+            menu.actionsEl.setAttribute("aria-hidden", isOpen ? "false" : "true");
+            menu.toggleEl.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        }
+    }
+
+    function closeShareMenus() {
+        openShareMenu = null;
+        setShareMenuOpen(null);
+    }
+
+    async function exportImage(buildImage) {
+        const el = buildImage();
+        const canvas = await renderExportCanvas(el);
+        return blobFromCanvas(canvas);
+    }
+
+    async function copyImage(buildImage, button) {
+        const blob = await exportImage(buildImage);
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        if (button) {
+            button.classList.add("copied");
+            setTimeout(() => button.classList.remove("copied"), 1500);
+        }
+        showShareToast("image copied");
+    }
+
+    async function downloadImage(buildImage, filename) {
+        const blob = await exportImage(buildImage);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
 
     // ── Analyze ─────────────────────────────────────────────────────────────
@@ -196,6 +272,10 @@
     applyTimeWindow(currentWindow);
     updateSimulateMixReadout();
     setSimulationPanelOpen(false);
+    closeShareMenus();
+    document.addEventListener("click", (event) => {
+        if (!event.target.closest(".share-controls")) closeShareMenus();
+    });
 
     async function analyze() {
         const address = addressInput.value.trim();
@@ -299,10 +379,8 @@
         renderHL(d);
         const isSimulation = d.mode === "simulate";
         coinsCard.style.display = isSimulation ? "none" : "";
-        shareSection.style.display = isSimulation ? "none" : "";
         hlDetailsCard.style.display = "";
         if (!isSimulation) renderCoins(d.top_coins);
-        if (!isSimulation) renderShareCards(d);
     }
 
     // ── Fees Overview (merged hero + comparisons) ───────────────────────────
@@ -349,7 +427,7 @@
                 ${historyNoticeHTML(d)}
             </div>
             <div class="overview-grid">
-                <div class="overview-grid-label">The same activity would have costed you:</div>
+                <div class="overview-grid-label">The same activity would have cost you:</div>
                 <div class="overview-exch">
                     <div class="overview-exch-name" style="color:var(--lighter)">lighter</div>
                     <div class="overview-exch-fees">${formatUSDFull(lighter.total_fees)}</div>
@@ -371,7 +449,18 @@
             </div>
         `;
 
-        $("copy-overview").onclick = () => copyOverview(d);
+        $("toggle-overview-share").onclick = (event) => {
+            event.stopPropagation();
+            setShareMenuOpen(openShareMenu === "overview" ? null : "overview");
+        };
+        $("download-overview").onclick = (event) => {
+            event.stopPropagation();
+            downloadOverview(d);
+        };
+        $("copy-overview").onclick = (event) => {
+            event.stopPropagation();
+            copyOverview(d);
+        };
     }
 
     // ── Overview Share Image ────────────────────────────────────────────────
@@ -400,7 +489,7 @@
                 <div style="flex:1;${sep}">
                     <div style="font-size:11px;font-weight:700;color:${ex.color};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${ex.name}</div>
                     <div style="font-size:16px;font-weight:700;margin-bottom:4px;font-variant-numeric:tabular-nums;color:${theme.text}">${formatUSDFull(ex.data.total_fees)}</div>
-                    <div style="font-size:10px;color:${theme.textMuted};margin-bottom:6px">taker: ${formatBps(ex.data.taker_rate)} &middot; maker: ${formatBps(ex.data.maker_rate)}</div>
+                    <div style="font-size:10px;color:${theme.textMuted};margin-bottom:6px;white-space:nowrap">taker: ${formatBps(ex.data.taker_rate)} &middot; maker: ${formatBps(ex.data.maker_rate)}</div>
                     <div style="font-size:11px;font-weight:600">${exchDiff(ex.data, ex.key)}</div>
                 </div>
             `;
@@ -417,9 +506,9 @@
                 <div style="font-size:10px;font-weight:500;color:${theme.textMuted};text-transform:uppercase;letter-spacing:0.1em">total fees paid on hyperliquid</div>
                 <div style="font-size:10px;color:${theme.textMuted};letter-spacing:0.08em">tradingfees.wtf</div>
             </div>
-            <div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;line-height:1">${formatUSDFull(hl.total_fees_paid)}</div>
+            <div style="font-size:30px;font-weight:800;letter-spacing:-0.03em;line-height:1">${formatUSDFull(hl.total_fees_paid)}</div>
             <div style="font-size:11px;color:${theme.textDim};margin-top:8px;margin-bottom:20px">${formatVolume(d.summary.total_volume)} volume across ${formatNum(d.summary.total_trades)} trades</div>
-            <div style="font-size:10px;font-weight:500;color:${theme.textMuted};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">The same activity would have costed you:</div>
+            <div style="font-size:10px;font-weight:500;color:${theme.textMuted};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">The same activity would have cost you:</div>
             <div style="border-top:1px solid ${theme.border};padding-top:16px;display:flex">
                 ${exchHTML}
             </div>
@@ -429,25 +518,23 @@
 
     async function copyOverview(d) {
         const btn = $("copy-overview");
-        const el = buildOverviewImage(d);
 
         try {
-            const canvas = await renderExportCanvas(el);
-            canvas.toBlob(async (blob) => {
-                if (!blob) return;
-                try {
-                    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                    btn.classList.add("copied");
-                    setTimeout(() => btn.classList.remove("copied"), 1500);
-                } catch (e) {
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, "_blank");
-                    setTimeout(() => URL.revokeObjectURL(url), 60000);
-                }
-            }, "image/png");
+            await copyImage(() => buildOverviewImage(d), btn);
+            closeShareMenus();
         } catch (e) {
-            document.body.removeChild(el);
             console.error("Failed to copy overview:", e);
+            showHint("unable to copy image", "error");
+        }
+    }
+
+    async function downloadOverview(d) {
+        try {
+            await downloadImage(() => buildOverviewImage(d), "tradingfees-overview.png");
+            closeShareMenus();
+        } catch (e) {
+            console.error("Failed to download overview:", e);
+            showHint("unable to download image", "error");
         }
     }
 
@@ -548,7 +635,18 @@
             container.appendChild(row);
         }
 
-        $("copy-bar-chart").onclick = () => copyBarChart(d);
+        $("toggle-bar-chart-share").onclick = (event) => {
+            event.stopPropagation();
+            setShareMenuOpen(openShareMenu === "bar-chart" ? null : "bar-chart");
+        };
+        $("download-bar-chart").onclick = (event) => {
+            event.stopPropagation();
+            downloadBarChart(d);
+        };
+        $("copy-bar-chart").onclick = (event) => {
+            event.stopPropagation();
+            copyBarChart(d);
+        };
     }
 
     function buildBarChartImage(d) {
@@ -597,25 +695,23 @@
 
     async function copyBarChart(d) {
         const btn = $("copy-bar-chart");
-        const el = buildBarChartImage(d);
 
         try {
-            const canvas = await renderExportCanvas(el);
-            canvas.toBlob(async (blob) => {
-                if (!blob) return;
-                try {
-                    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                    btn.classList.add("copied");
-                    setTimeout(() => btn.classList.remove("copied"), 1500);
-                } catch (e) {
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, "_blank");
-                    setTimeout(() => URL.revokeObjectURL(url), 60000);
-                }
-            }, "image/png");
+            await copyImage(() => buildBarChartImage(d), btn);
+            closeShareMenus();
         } catch (e) {
-            document.body.removeChild(el);
             console.error("Failed to copy bar chart:", e);
+            showHint("unable to copy image", "error");
+        }
+    }
+
+    async function downloadBarChart(d) {
+        try {
+            await downloadImage(() => buildBarChartImage(d), "tradingfees-comparison.png");
+            closeShareMenus();
+        } catch (e) {
+            console.error("Failed to download bar chart:", e);
+            showHint("unable to download image", "error");
         }
     }
 
@@ -649,156 +745,6 @@
         }
         html += "</tbody></table></div>";
         container.innerHTML = html;
-    }
-
-    // ── Shareable Cards ─────────────────────────────────────────────────────
-    function renderShareCards(d) {
-        const container = $("share-cards");
-        container.innerHTML = "";
-        shareExpanded = false;
-        shareToggleBtn.textContent = "Show share options";
-        container.style.display = "none";
-
-        const cards = [
-            {
-                exchange: "Lighter", color: "#4a7aff",
-                bgGrad: "linear-gradient(135deg, #12122a 0%, #151540 50%, #12122a 100%)",
-                fees: 0, savings: d.hyperliquid.total_fees_paid, tagline: "zero fees. always.",
-            },
-            {
-                exchange: "Binance", color: "#f0b90b",
-                bgGrad: "linear-gradient(135deg, #0a0a0f 0%, #1a1808 50%, #0a0a0f 100%)",
-                fees: d.comparisons.binance.total_fees, diff: d.comparisons.binance.diff_vs_hl,
-            },
-            {
-                exchange: "Bybit", color: "#f7a600",
-                bgGrad: "linear-gradient(135deg, #0a0a0f 0%, #1a1508 50%, #0a0a0f 100%)",
-                fees: d.comparisons.bybit.total_fees, diff: d.comparisons.bybit.diff_vs_hl,
-            },
-        ];
-
-        for (const card of cards) {
-            const wrap = document.createElement("div");
-            wrap.className = "share-card-wrap";
-
-            const el = buildShareCard(card, d);
-            wrap.appendChild(el);
-
-            const btnRow = document.createElement("div");
-            btnRow.className = "share-btn-row";
-
-            const dlBtn = document.createElement("button");
-            dlBtn.className = "download-btn";
-            dlBtn.textContent = "download";
-            dlBtn.addEventListener("click", () => downloadCard(el, card.exchange));
-
-            const cpBtn = document.createElement("button");
-            cpBtn.className = "download-btn";
-            cpBtn.textContent = "copy";
-            cpBtn.addEventListener("click", () => copyCard(el, cpBtn));
-
-            btnRow.appendChild(dlBtn);
-            btnRow.appendChild(cpBtn);
-            wrap.appendChild(btnRow);
-            container.appendChild(wrap);
-        }
-    }
-
-    shareToggleBtn.addEventListener("click", () => {
-        const container = $("share-cards");
-        shareExpanded = !shareExpanded;
-        container.style.display = shareExpanded ? "flex" : "none";
-        shareToggleBtn.textContent = shareExpanded ? "Hide share options" : "Show share options";
-    });
-
-    function buildShareCard(card, d) {
-        const el = document.createElement("div");
-        el.className = "share-card";
-
-        const vol = formatVolume(d.summary.total_volume);
-        const trades = formatNum(d.summary.total_trades);
-        const days = Math.round(d.summary.trading_days);
-
-        let mainText, subText;
-        if (card.exchange === "Lighter") {
-            mainText = `save ${formatUSDFull(card.savings)}`;
-            subText = card.tagline;
-        } else {
-            if (card.diff > 0) {
-                mainText = `${formatUSDFull(card.diff)} more on Hyperliquid`;
-                subText = `would pay ${formatUSDFull(card.fees)} on ${card.exchange}`;
-            } else if (card.diff < 0) {
-                mainText = `save ${formatUSDFull(Math.abs(card.diff))} on Hyperliquid`;
-                subText = `would pay ${formatUSDFull(card.fees)} on ${card.exchange}`;
-            } else {
-                mainText = "same fees";
-                subText = `${formatUSDFull(card.fees)} on both`;
-            }
-        }
-
-        el.style.cssText = `
-            width: 600px; height: 340px;
-            background: ${card.bgGrad};
-            border-radius: 8px; position: relative; overflow: hidden;
-            font-family: 'JetBrains Mono', monospace; color: #f0f0f5;
-            display: flex; flex-direction: column; justify-content: space-between;
-            padding: 32px 36px;
-        `;
-
-        el.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center">
-                <div style="font-size:16px;font-weight:800;color:${card.color};letter-spacing:0.05em;text-transform:uppercase">${card.exchange}</div>
-                <div style="font-size:10px;color:#606070;letter-spacing:0.08em">tradingfees.wtf</div>
-            </div>
-            <div style="text-align:center">
-                <div style="font-size:32px;font-weight:800;margin-bottom:8px;letter-spacing:-0.03em;color:#f0f0f5">${mainText}</div>
-                <div style="font-size:13px;color:#9090a0">${subText}</div>
-            </div>
-            <div>
-                <div style="border-top:1px solid #2a2a35;padding-top:12px;display:flex;justify-content:space-between;font-size:11px;color:#606070">
-                    <span>volume: ${vol}</span>
-                    <span>${trades} trades</span>
-                    <span>${days} days</span>
-                </div>
-                <div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:${card.color}"></div>
-            </div>
-        `;
-        return el;
-    }
-
-    async function renderCardCanvas(el) {
-        const clonedCard = el.cloneNode(true);
-        const exportFrame = buildExportFrame(clonedCard, { innerPadding: 18 });
-        return renderExportCanvas(exportFrame);
-    }
-
-    async function downloadCard(el, name) {
-        try {
-            const canvas = await renderCardCanvas(el);
-            const link = document.createElement("a");
-            link.download = `tradingfees-${name.toLowerCase()}.png`;
-            link.href = canvas.toDataURL("image/png");
-            link.click();
-        } catch (e) { console.error("download failed:", e); }
-    }
-
-    async function copyCard(el, btn) {
-        try {
-            const canvas = await renderCardCanvas(el);
-            canvas.toBlob(async (blob) => {
-                if (!blob) return;
-                try {
-                    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                    const orig = btn.textContent;
-                    btn.textContent = "copied!";
-                    setTimeout(() => (btn.textContent = orig), 1500);
-                } catch (e) {
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, "_blank");
-                    setTimeout(() => URL.revokeObjectURL(url), 60000);
-                }
-            }, "image/png");
-        } catch (e) { console.error("copy failed:", e); }
     }
 
     // ── Init ────────────────────────────────────────────────────────────────

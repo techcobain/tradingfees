@@ -78,18 +78,38 @@
 
             <!-- Fees overview (merged hero + comparisons) -->
             <div class="section-block" id="fees-overview" style="position:relative">
-                <button class="copy-icon-btn" id="copy-overview" title="Copy as image">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </button>
+                <div class="share-controls" id="overview-share-controls">
+                    <div class="share-action-list" id="overview-share-actions" aria-hidden="true">
+                        <button class="share-action-btn" id="download-overview" type="button" title="Download image" aria-label="Download image">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                        </button>
+                        <button class="share-action-btn" id="copy-overview" type="button" title="Copy image" aria-label="Copy image">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                    </div>
+                    <button class="copy-icon-btn" id="toggle-overview-share" title="Share image" type="button" aria-expanded="false" aria-label="Share image">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51 15.42 17.49"/><path d="M15.41 6.51 8.59 10.49"/></svg>
+                    </button>
+                </div>
                 <div id="fees-overview-content"></div>
             </div>
 
             <!-- Bar chart -->
             <div class="section-block" id="bar-chart-card" style="position:relative">
                 <div class="section-label">fee comparison</div>
-                <button class="copy-icon-btn" id="copy-bar-chart" title="Copy as image">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </button>
+                <div class="share-controls" id="bar-chart-share-controls">
+                    <div class="share-action-list" id="bar-chart-share-actions" aria-hidden="true">
+                        <button class="share-action-btn" id="download-bar-chart" type="button" title="Download image" aria-label="Download image">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                        </button>
+                        <button class="share-action-btn" id="copy-bar-chart" type="button" title="Copy image" aria-label="Copy image">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                    </div>
+                    <button class="copy-icon-btn" id="toggle-bar-chart-share" title="Share image" type="button" aria-expanded="false" aria-label="Share image">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51 15.42 17.49"/><path d="M15.41 6.51 8.59 10.49"/></svg>
+                    </button>
+                </div>
                 <div id="bar-chart"></div>
             </div>
 
@@ -102,20 +122,13 @@
                 <div id="coins-table"></div>
             </div>
 
-            <!-- Share -->
-            <div class="section-block" id="share-section">
-                <div class="section-label">Share your results</div>
-                <button class="share-toggle-btn" id="share-toggle-btn" type="button">Show share options</button>
-                <div class="share-cards" id="share-cards" style="display:none"></div>
-            </div>
         </section>
 
         <footer>
-            <span>built by <a href="https://x.com/StayRoamer" target="_blank">supertramp</a></span>
-            <span class="dot">&middot;</span>
             <span>data from <a href="https://hyperliquid.xyz" target="_blank">hyperliquid</a></span>
         </footer>
     </div>
+    <div class="share-toast" id="share-toast" role="status" aria-live="polite"></div>
     <script src="/static/app.js"></script>
 </body>
 </html>
