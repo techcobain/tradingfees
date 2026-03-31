@@ -115,11 +115,15 @@ async def fetch_spot_meta(client: httpx.AsyncClient) -> dict:
 
 
 async def fetch_all_fills(client: httpx.AsyncClient, address: str) -> dict:
-    """Paginate through all user fills, newest first then backwards.
+    """Fetch all user fills by paginating forward through time.
+
+    The HL userFillsByTime API returns the *oldest* 2000 fills in a given time
+    window.  We page forward by advancing startTime past the latest fill we've
+    seen until we either exhaust the history or hit MAX_FILLS.
 
     Returns fills sorted by time ascending (oldest first).
     """
-    # Step 1: get the most recent 2000 fills
+    # Step 1: get the most recent 2000 fills (gives us the end-of-history anchor)
     fills = await _post_hl(
         client,
         {"type": "userFills", "user": address},
@@ -133,9 +137,12 @@ async def fetch_all_fills(client: httpx.AsyncClient, address: str) -> dict:
     seen_tids = {f.get("tid") for f in all_fills}
     truncated = False
 
-    # Step 2: paginate backwards if we got a full page
+    # Step 2: if there may be older fills, page forward from the beginning
     if len(fills) >= PAGE_SIZE:
-        earliest_time = min(int(f["time"]) for f in fills)
+        earliest_recent = min(int(f["time"]) for f in fills)
+
+        start_time = 0
+        end_time = earliest_recent - 1
 
         while len(all_fills) < MAX_FILLS:
             page = await _post_hl(
@@ -143,8 +150,8 @@ async def fetch_all_fills(client: httpx.AsyncClient, address: str) -> dict:
                 {
                     "type": "userFillsByTime",
                     "user": address,
-                    "startTime": 0,
-                    "endTime": earliest_time - 1,
+                    "startTime": start_time,
+                    "endTime": end_time,
                 },
                 timeout=30,
             )
@@ -152,20 +159,20 @@ async def fetch_all_fills(client: httpx.AsyncClient, address: str) -> dict:
             if not page:
                 break
 
-            # Deduplicate
             new_fills = [f for f in page if f.get("tid") not in seen_tids]
             if not new_fills:
                 break
 
             all_fills.extend(new_fills)
             seen_tids.update(f.get("tid") for f in new_fills)
-
             logger.info(f"Fetched {len(all_fills)} fills so far...")
 
             if len(page) < PAGE_SIZE:
                 break
 
-            earliest_time = min(int(f["time"]) for f in new_fills)
+            # API returned oldest 2000 — advance past the latest we received
+            latest_returned = max(int(f["time"]) for f in page)
+            start_time = latest_returned + 1
 
         if len(all_fills) >= MAX_FILLS:
             truncated = True
